@@ -6,7 +6,7 @@ import TableSkeleton from './components/TableSkeleton';
 import SummaryBox from './components/SummaryBox';
 import { MOCK_ASSETS, INITIAL_GAINS } from './data';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronDown, Info } from 'lucide-react';
+import { Search, ChevronDown, Info } from 'lucide-react';
 import TaxSavingsChart from './components/TaxSavingsChart';
 import Auth from './components/Auth';
 
@@ -21,12 +21,16 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [isBannerExpanded, setIsBannerExpanded] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [globalSuggestions, setGlobalSuggestions] = useState([]);
+  const [isSearchingGlobal, setIsSearchingGlobal] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   // Fetch Real-time Coins from CoinGecko
   useEffect(() => {
     const fetchCoins = async () => {
       try {
-        const response = await fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1&sparkline=false');
+        const response = await fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=true');
         const data = await response.json();
 
         const transformedAssets = data.map((coin, index) => {
@@ -44,7 +48,9 @@ function App() {
             value: parseFloat(mockHoldings) * coin.current_price,
             shortTermPerformance: index % 2 === 0 ? mockLoss : 0,
             longTermPerformance: index % 2 !== 0 ? mockLoss : 0,
-            type: index % 2 === 0 ? 'ST' : 'LT'
+            type: index % 2 === 0 ? 'ST' : 'LT',
+            timestamp: Date.now() - (index * 1000), // Ensure stable order
+            sparkline: coin.sparkline_in_7d?.price || []
           };
         });
 
@@ -62,6 +68,75 @@ function App() {
 
     fetchCoins();
   }, []);
+
+  // Global Search Effect
+  useEffect(() => {
+    if (!searchQuery.trim() || searchQuery.length < 2) {
+      setGlobalSuggestions([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearchingGlobal(true);
+      try {
+        const response = await fetch(`https://api.coingecko.com/api/v3/search?query=${searchQuery}`);
+        const data = await response.json();
+        
+        // Filter out coins already in our assets list
+        const existingIds = new Set(assets.map(a => a.id));
+        const newSuggestions = data.coins
+          .filter(coin => !existingIds.has(coin.id))
+          .slice(0, 5); // Limit to 5 suggestions
+        
+        setGlobalSuggestions(newSuggestions);
+      } catch (error) {
+        console.error('Global search error:', error);
+      } finally {
+        setIsSearchingGlobal(false);
+      }
+    }, 500); // 500ms debounce
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, assets]);
+
+  const handleAddGlobalAsset = async (coinId) => {
+    setIsLoading(true);
+    setShowSuggestions(false);
+    setSearchQuery('');
+    
+    try {
+      const response = await fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${coinId}&order=market_cap_desc&sparkline=true`);
+      const data = await response.json();
+      
+      if (data && data.length > 0) {
+        const coin = data[0];
+        const mockHoldings = (Math.random() * 5).toFixed(2);
+        const mockLoss = Math.random() > 0.5 ? -(Math.random() * 500) : (Math.random() * 200);
+
+        const newAsset = {
+          id: coin.id,
+          name: coin.name,
+          symbol: coin.symbol.toUpperCase(),
+          icon: coin.image,
+          holdings: parseFloat(mockHoldings),
+          price: coin.current_price,
+          value: parseFloat(mockHoldings) * coin.current_price,
+          shortTermPerformance: mockLoss,
+          longTermPerformance: 0,
+          type: 'ST',
+          timestamp: Date.now(),
+          sparkline: coin.sparkline_in_7d?.price || []
+        };
+
+        setAssets(prev => [newAsset, ...prev]);
+        setSelectedIds(prev => [...prev, newAsset.id]); // Automatically select the new asset
+      }
+    } catch (error) {
+      console.error('Error adding global asset:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleToggle = (id) => {
     console.log('Toggling asset:', id);
@@ -328,44 +403,154 @@ function App() {
                   <h2 style={{ fontSize: '1.5rem', fontWeight: 900, marginBottom: '0.25rem', letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>Select Assets to Harvest</h2>
                   <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', fontWeight: 500 }}>Identify unrealized losses in your portfolio.</p>
                 </div>
-                <div
-                  onClick={() => setShowAll(!showAll)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '1rem',
-                    cursor: 'pointer',
-                    userSelect: 'none',
-                    backgroundColor: 'var(--card-bg)',
-                    padding: '0.75rem 1.25rem',
-                    borderRadius: '14px',
-                    border: '1px solid var(--border)',
-                    boxShadow: 'var(--shadow)'
-                  }}
-                >
-                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontWeight: 700 }}>Show All Assets</span>
-                  <div style={{
-                    width: '44px',
-                    height: '24px',
-                    backgroundColor: showAll ? 'var(--primary)' : 'rgba(255,255,255,0.1)',
-                    borderRadius: '12px',
+                
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  {/* Search Bar */}
+                  <div style={{ 
                     position: 'relative',
-                    transition: 'background-color 0.3s'
+                    minWidth: '240px'
                   }}>
-                    <motion.div
-                      animate={{ x: showAll ? 22 : 2 }}
-                      initial={false}
-                      transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                    <Search 
+                      size={18} 
+                      style={{ 
+                        position: 'absolute', 
+                        left: '12px', 
+                        top: '50%', 
+                        transform: 'translateY(-50%)',
+                        color: 'var(--text-secondary)',
+                        opacity: 0.7
+                      }} 
+                    />
+                    <input 
+                      type="text" 
+                      placeholder="Search or add any coin..."
+                      value={searchQuery}
+                      onChange={(e) => {
+                        setSearchQuery(e.target.value);
+                        setShowSuggestions(true);
+                      }}
+                      onFocus={(e) => {
+                        e.target.style.borderColor = 'var(--primary)';
+                        e.target.style.boxShadow = '0 0 0 4px rgba(0, 82, 254, 0.1)';
+                        setShowSuggestions(true);
+                      }}
+                      onBlur={(e) => {
+                        e.target.style.borderColor = 'var(--border)';
+                        e.target.style.boxShadow = 'var(--shadow)';
+                        // Small timeout to allow clicking suggestions
+                        setTimeout(() => setShowSuggestions(false), 200);
+                      }}
                       style={{
-                        width: '20px',
-                        height: '20px',
-                        backgroundColor: 'white',
-                        borderRadius: '50%',
-                        position: 'absolute',
-                        top: '2px',
-                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                        width: '100%',
+                        padding: '0.75rem 1rem 0.75rem 2.5rem',
+                        borderRadius: '14px',
+                        border: '1px solid var(--border)',
+                        backgroundColor: 'var(--card-bg)',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.9rem',
+                        fontWeight: 600,
+                        outline: 'none',
+                        transition: 'all 0.3s',
+                        boxShadow: 'var(--shadow)'
                       }}
                     />
+
+                    {/* Search Suggestions Dropdown */}
+                    <AnimatePresence>
+                      {showSuggestions && (globalSuggestions.length > 0 || isSearchingGlobal) && (
+                        <motion.div
+                          initial={{ opacity: 0, y: -10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                          style={{
+                            position: 'absolute',
+                            top: '100%',
+                            left: 0,
+                            right: 0,
+                            marginTop: '0.5rem',
+                            backgroundColor: 'white',
+                            borderRadius: '12px',
+                            boxShadow: '0 10px 25px rgba(0,0,0,0.1)',
+                            border: '1px solid var(--border)',
+                            zIndex: 1000,
+                            overflow: 'hidden'
+                          }}
+                        >
+                          {isSearchingGlobal && (
+                            <div style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                              Searching for more coins...
+                            </div>
+                          )}
+                          {!isSearchingGlobal && globalSuggestions.map(coin => (
+                            <div
+                              key={coin.id}
+                              onClick={() => handleAddGlobalAsset(coin.id)}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.75rem',
+                                padding: '0.75rem 1rem',
+                                cursor: 'pointer',
+                                transition: 'background-color 0.2s',
+                                borderBottom: '1px solid #f1f5f9'
+                              }}
+                              onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f8fafc'}
+                              onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                            >
+                              <img src={coin.thumb} alt={coin.name} style={{ width: '20px', height: '20px', borderRadius: '50%' }} />
+                              <div style={{ flex: 1 }}>
+                                <div style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-primary)' }}>{coin.name}</div>
+                                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{coin.symbol}</div>
+                              </div>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--primary)', backgroundColor: 'var(--primary-light)', padding: '0.2rem 0.5rem', borderRadius: '6px' }}>
+                                Add
+                              </div>
+                            </div>
+                          ))}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+
+                  <div
+                    onClick={() => setShowAll(!showAll)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '1rem',
+                      cursor: 'pointer',
+                      userSelect: 'none',
+                      backgroundColor: 'var(--card-bg)',
+                      padding: '0.75rem 1.25rem',
+                      borderRadius: '14px',
+                      border: '1px solid var(--border)',
+                      boxShadow: 'var(--shadow)'
+                    }}
+                  >
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontWeight: 700 }}>Show All Assets</span>
+                    <div style={{
+                      width: '44px',
+                      height: '24px',
+                      backgroundColor: showAll ? 'var(--primary)' : 'rgba(255,255,255,0.1)',
+                      borderRadius: '12px',
+                      position: 'relative',
+                      transition: 'background-color 0.3s'
+                    }}>
+                      <motion.div
+                        animate={{ x: showAll ? 22 : 2 }}
+                        initial={false}
+                        transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                        style={{
+                          width: '20px',
+                          height: '20px',
+                          backgroundColor: 'white',
+                          borderRadius: '50%',
+                          position: 'absolute',
+                          top: '2px',
+                          boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                        }}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -374,16 +559,23 @@ function App() {
                 <TableSkeleton />
               ) : (
                 <>
-                  <AssetTable
-                    assets={showAll ? assets : assets.filter(a => (a.shortTermPerformance + a.longTermPerformance) < 0)}
-                    selectedIds={selectedIds}
-                    onToggle={handleToggle}
-                    onToggleAll={handleToggleAll}
-                  />
                   <SummaryBox
                     harvestedLoss={calculations.totalHarvestedLoss}
                     taxSavings={calculations.taxSavings}
                     assetsCount={selectedIds.length}
+                  />
+                  <AssetTable
+                    assets={assets.filter(a => {
+                      const matchesSearch = a.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                                          a.symbol.toLowerCase().includes(searchQuery.toLowerCase());
+                      
+                      if (searchQuery.trim()) return matchesSearch;
+                      
+                      return showAll ? true : (a.shortTermPerformance + a.longTermPerformance) < 0;
+                    })}
+                    selectedIds={selectedIds}
+                    onToggle={handleToggle}
+                    onToggleAll={handleToggleAll}
                   />
                 </>
               )}
